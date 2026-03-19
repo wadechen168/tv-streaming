@@ -1,5 +1,5 @@
 # ================================================================
-#  HUYA → TV STREAMER (CLOUD) — tv_cloud.py  v1.6
+#  HUYA → TV STREAMER (CLOUD) — tv_cloud.py  v1.7
 #  Headless Linux version for ClawCloud / Docker
 #  Gate page: channel select + code + Watch/Stop
 # ================================================================
@@ -23,7 +23,7 @@ TG_TOKEN   = os.environ.get("TG_TOKEN",  "8230303716:AAH3bppU55xK4mTEmLh2gCFTc91
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "5406920859")
 PORT       = int(os.environ.get("PORT", 8080))
 HLS_DIR    = "/tmp/hls"
-STREAM_NAME = "best"
+STREAM_NAME = "tx_2000k"
 
 CHANNELS = [
     ("虎牙斯诺克",      "https://m.huya.com/880214"),   # default
@@ -344,7 +344,7 @@ def main():
     os.makedirs(HLS_DIR, exist_ok=True)
 
     print("=" * 58)
-    print("  HUYA → TV STREAMER (CLOUD)  v1.6")
+    print("  HUYA → TV STREAMER (CLOUD)  v1.7")
     print("=" * 58)
     print(f"  Port : {PORT}")
     print(f"  Code : {access_code}")
