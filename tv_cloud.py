@@ -1,5 +1,5 @@
 # ================================================================
-#  HUYA → TV STREAMER (CLOUD) — tv_cloud.py  v1.2
+#  HUYA → TV STREAMER (CLOUD) — tv_cloud.py  v1.3
 #  Headless Linux version for ClawCloud / Docker
 #  Gate page: channel select + code + Watch/Stop
 # ================================================================
@@ -107,6 +107,7 @@ def start_stream(url=None):
     ff_cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-i", "pipe:0",
+        "-map", "0:v:0", "-map", "0:a:0",
         "-c", "copy",
         "-f", "hls",
         "-hls_time", "2",
@@ -117,6 +118,7 @@ def start_stream(url=None):
 
     with proc_lock:
         sl_proc = subprocess.Popen(sl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        time.sleep(3)  # give streamlink time to start outputting
         ff_proc = subprocess.Popen(ff_cmd, stdin=sl_proc.stdout, stderr=None)
         sl_proc.stdout.close()
 
@@ -324,7 +326,7 @@ def main():
     os.makedirs(HLS_DIR, exist_ok=True)
 
     print("=" * 58)
-    print("  HUYA → TV STREAMER (CLOUD)  v1.2")
+    print("  HUYA → TV STREAMER (CLOUD)  v1.3")
     print("=" * 58)
     print(f"  Port : {PORT}")
     print(f"  Code : {access_code}")
