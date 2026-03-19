@@ -1,5 +1,5 @@
 # ================================================================
-#  HUYA → TV STREAMER (CLOUD) — tv_cloud.py  v1.5
+#  HUYA → TV STREAMER (CLOUD) — tv_cloud.py  v1.6
 #  Headless Linux version for ClawCloud / Docker
 #  Gate page: channel select + code + Watch/Stop
 # ================================================================
@@ -85,7 +85,7 @@ def fmt_hms(seconds):
 def cleanup_hls():
     try:
         for f in os.listdir(HLS_DIR):
-            if f.startswith("live"):
+            if f.startswith("live") or f == "input.ts":
                 try:
                     os.remove(os.path.join(HLS_DIR, f))
                 except:
@@ -103,10 +103,12 @@ def start_stream(url=None):
         current_url = url
     cleanup_hls()
 
-    sl_cmd = ["streamlink", "--stdout", "--hls-live-restart", current_url, STREAM_NAME]
+    TEMP_TS = "/tmp/hls/input.ts"
+
+    sl_cmd = ["streamlink", "--output", TEMP_TS, "--force", "--hls-live-restart", current_url, STREAM_NAME]
     ff_cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
-        "-i", "pipe:0",
+        "-re", "-i", TEMP_TS,
         "-map", "0:v:0", "-map", "0:a:0",
         "-c", "copy",
         "-f", "hls",
@@ -116,36 +118,20 @@ def start_stream(url=None):
         os.path.join(HLS_DIR, "live.m3u8")
     ]
 
-    sl = subprocess.Popen(sl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    ff = subprocess.Popen(ff_cmd, stdin=subprocess.PIPE, stderr=None)
+    sl = subprocess.Popen(sl_cmd, stderr=subprocess.DEVNULL)
+    # Wait for streamlink to create and start writing the file
+    print("[Stream] Waiting for streamlink to start...")
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if os.path.exists(TEMP_TS) and os.path.getsize(TEMP_TS) > 10000:
+            break
+        time.sleep(0.5)
+    print("[Stream] Starting ffmpeg...")
+    ff = subprocess.Popen(ff_cmd, stderr=None)
 
     with proc_lock:
         sl_proc = sl
         ff_proc = ff
-
-    def pipe_thread():
-        print("[Stream] Waiting for streamlink data...")
-        deadline = time.time() + 30
-        started = False
-        while time.time() < deadline:
-            if sl.poll() is not None:
-                print("[Stream] Streamlink exited early")
-                break
-            chunk = sl.stdout.read(4096)
-            if chunk:
-                if not started:
-                    print("[Stream] Data flowing, ffmpeg receiving...")
-                    started = True
-                try:
-                    ff.stdin.write(chunk)
-                except:
-                    break
-        try:
-            ff.stdin.close()
-        except:
-            pass
-
-    threading.Thread(target=pipe_thread, daemon=True).start()
 
     print(f"[Stream] Started: {current_url}")
 
@@ -358,7 +344,7 @@ def main():
     os.makedirs(HLS_DIR, exist_ok=True)
 
     print("=" * 58)
-    print("  HUYA → TV STREAMER (CLOUD)  v1.5")
+    print("  HUYA → TV STREAMER (CLOUD)  v1.6")
     print("=" * 58)
     print(f"  Port : {PORT}")
     print(f"  Code : {access_code}")
