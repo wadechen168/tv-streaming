@@ -1,5 +1,5 @@
 # ================================================================
-#  HUYA → TV STREAMER (CLOUD) — tv_cloud.py  v1.3
+#  HUYA → TV STREAMER (CLOUD) — tv_cloud.py  v1.5
 #  Headless Linux version for ClawCloud / Docker
 #  Gate page: channel select + code + Watch/Stop
 # ================================================================
@@ -116,11 +116,36 @@ def start_stream(url=None):
         os.path.join(HLS_DIR, "live.m3u8")
     ]
 
+    sl = subprocess.Popen(sl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    ff = subprocess.Popen(ff_cmd, stdin=subprocess.PIPE, stderr=None)
+
     with proc_lock:
-        sl_proc = subprocess.Popen(sl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        time.sleep(3)  # give streamlink time to start outputting
-        ff_proc = subprocess.Popen(ff_cmd, stdin=sl_proc.stdout, stderr=None)
-        sl_proc.stdout.close()
+        sl_proc = sl
+        ff_proc = ff
+
+    def pipe_thread():
+        print("[Stream] Waiting for streamlink data...")
+        deadline = time.time() + 30
+        started = False
+        while time.time() < deadline:
+            if sl.poll() is not None:
+                print("[Stream] Streamlink exited early")
+                break
+            chunk = sl.stdout.read(4096)
+            if chunk:
+                if not started:
+                    print("[Stream] Data flowing, ffmpeg receiving...")
+                    started = True
+                try:
+                    ff.stdin.write(chunk)
+                except:
+                    break
+        try:
+            ff.stdin.close()
+        except:
+            pass
+
+    threading.Thread(target=pipe_thread, daemon=True).start()
 
     print(f"[Stream] Started: {current_url}")
 
@@ -295,8 +320,15 @@ class Handler(BaseHTTPRequestHandler):
 
             unlocked_ips.add(ip)
             print(f"[Auth] {ip} unlocked → {url}")
-            stop_stream()
-            start_stream(url)
+
+            # Only restart if different channel or stream is dead
+            with proc_lock:
+                ff_poll = ff_proc.poll() if ff_proc else "no_proc"
+                stream_dead = (ff_proc is None or ff_poll is not None)
+
+            if url != current_url or stream_dead:
+                stop_stream()
+                start_stream(url)
 
             self.send_response(302)
             self.send_header("Location", "/live.m3u8")
@@ -326,7 +358,7 @@ def main():
     os.makedirs(HLS_DIR, exist_ok=True)
 
     print("=" * 58)
-    print("  HUYA → TV STREAMER (CLOUD)  v1.3")
+    print("  HUYA → TV STREAMER (CLOUD)  v1.5")
     print("=" * 58)
     print(f"  Port : {PORT}")
     print(f"  Code : {access_code}")
