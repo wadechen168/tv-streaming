@@ -1,7 +1,7 @@
 # ================================================================
-#  HUYA → TV STREAMER (CLOUD) — tv_cloud.py  v1.0
+#  HUYA → TV STREAMER (CLOUD) — tv_cloud.py  v1.2
 #  Headless Linux version for ClawCloud / Docker
-#  Gate page with 6-digit code sent to Telegram on startup
+#  Gate page: channel select + code + Watch/Stop
 # ================================================================
 
 import os
@@ -12,29 +12,51 @@ import random
 import signal
 import sys
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 import requests
 
 # ================================================================
-#  CONFIG — set these as environment variables in ClawCloud
+#  CONFIG — set via environment variables in ClawCloud
 # ================================================================
 
-HUYA_URL        = os.environ.get("HUYA_URL", "https://m.huya.com/880214")
-TG_TOKEN        = os.environ.get("TG_TOKEN",  "8230303716:AAH3bppU55xK4mTEmLh2gCFTc91SjqkvGUk")
-TG_CHAT_ID      = os.environ.get("TG_CHAT_ID", "5406920859")
-PORT            = int(os.environ.get("PORT", 8080))
-HLS_DIR         = "/tmp/hls"
-STREAM_NAME     = "best"
+TG_TOKEN   = os.environ.get("TG_TOKEN",  "8230303716:AAH3bppU55xK4mTEmLh2gCFTc91SjqkvGUk")
+TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "5406920859")
+PORT       = int(os.environ.get("PORT", 8080))
+HLS_DIR    = "/tmp/hls"
+STREAM_NAME = "best"
+
+CHANNELS = [
+    ("虎牙斯诺克",      "https://m.huya.com/880214"),   # default
+    ("斯诺克副台",      "https://m.huya.com/880625"),
+    ("光头阿强",        "https://m.huya.com/28962587"),
+    ("台球1号桌",       "https://m.huya.com/20072620"),
+    ("台球2号桌",       "https://m.huya.com/20072621"),
+    ("台球3号桌",       "https://m.huya.com/18501408"),
+    ("台球4号桌",       "https://m.huya.com/18501324"),
+    ("台球5号桌",       "https://m.huya.com/17455465"),
+    ("台球6号桌",       "https://m.huya.com/18501329"),
+    ("台球7号桌",       "https://m.huya.com/18501166"),
+    ("台球8号桌",       "https://m.huya.com/17611732"),
+    ("银诺台球",        "https://m.huya.com/yinuotaiqiu"),
+    ("星辰直播",        "https://m.huya.com/398147"),
+    ("李锦教练",        "https://m.huya.com/631274"),
+    ("洋洋台球",        "https://m.huya.com/22939862"),
+    ("梁台球",          "https://m.huya.com/26410375"),
+    ("肖国栋",          "https://m.huya.com/210147"),
+    ("Long3mu",         "https://m.huya.com/26245146"),
+]
 
 # ================================================================
 #  STATE
 # ================================================================
 
-access_code     = str(random.randint(100000, 999999))
-unlocked_ips    = set()
-sl_proc         = None
-ff_proc         = None
-running         = True
-proc_lock       = threading.Lock()
+access_code  = str(random.randint(100000, 999999))
+unlocked_ips = set()
+current_url  = CHANNELS[0][1]
+sl_proc      = None
+ff_proc      = None
+running      = True
+proc_lock    = threading.Lock()
 
 # ================================================================
 #  TELEGRAM
@@ -75,15 +97,16 @@ def cleanup_hls():
 #  STREAM
 # ================================================================
 
-def start_stream():
-    global sl_proc, ff_proc
+def start_stream(url=None):
+    global sl_proc, ff_proc, current_url
+    if url:
+        current_url = url
     cleanup_hls()
 
-    sl_cmd = ["streamlink", "--stdout", HUYA_URL, STREAM_NAME]
+    sl_cmd = ["streamlink", "--stdout", "--hls-live-restart", current_url, STREAM_NAME]
     ff_cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-i", "pipe:0",
-        "-map", "0:v:0", "-map", "0:a:0",
         "-c", "copy",
         "-f", "hls",
         "-hls_time", "2",
@@ -94,10 +117,10 @@ def start_stream():
 
     with proc_lock:
         sl_proc = subprocess.Popen(sl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        ff_proc = subprocess.Popen(ff_cmd, stdin=sl_proc.stdout, stderr=subprocess.DEVNULL)
+        ff_proc = subprocess.Popen(ff_cmd, stdin=sl_proc.stdout, stderr=None)
         sl_proc.stdout.close()
 
-    print(f"[Stream] Started: {HUYA_URL}")
+    print(f"[Stream] Started: {current_url}")
 
 def stop_stream():
     global sl_proc, ff_proc
@@ -137,42 +160,68 @@ def heartbeat():
             print(f"\n[Heartbeat] ERROR: {e}")
 
 # ================================================================
-#  HTTP HANDLER — gate page + HLS serving
+#  GATE PAGE HTML
 # ================================================================
 
-GATE_HTML = """<!DOCTYPE html>
+def build_gate_html(error=""):
+    rows = ""
+    for i, (name, url) in enumerate(CHANNELS, 1):
+        default = " ← default" if i == 1 else ""
+        rows += f'<tr><td><input type="radio" name="ch" value="{url}" {"checked" if i==1 else ""}></td><td>{i}.</td><td>{name}</td><td style="color:#aaa;font-size:0.85em">{url}{default}</td></tr>\n'
+    rows += f'<tr><td><input type="radio" name="ch" value="custom"></td><td>0.</td><td colspan="2"><input type="text" name="custom_url" placeholder="Enter Huya URL manually" style="width:320px;font-size:0.95em;padding:4px;border-radius:4px;border:none"></td></tr>\n'
+
+    return f"""<!DOCTYPE html>
 <html>
 <head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TV Stream</title>
+<title>📺 TV Stream</title>
 <style>
-  body {{ background:#111; color:#fff; font-family:sans-serif;
-         display:flex; flex-direction:column; align-items:center;
-         justify-content:center; height:100vh; margin:0; }}
-  h2   {{ margin-bottom:30px; font-size:1.5em; }}
-  input {{ font-size:2em; width:220px; text-align:center; padding:10px;
-           border-radius:8px; border:none; letter-spacing:8px; }}
-  button {{ margin-top:20px; font-size:1.2em; padding:12px 40px;
-            border-radius:8px; border:none; background:#1a73e8;
-            color:#fff; cursor:pointer; }}
-  .err {{ color:#f66; margin-top:15px; font-size:1.1em; }}
+  body {{ background:#111; color:#fff; font-family:monospace;
+         padding:30px 20px; margin:0; }}
+  h2   {{ margin-bottom:20px; font-size:1.3em; }}
+  table {{ border-collapse:collapse; margin-bottom:24px; }}
+  td   {{ padding:5px 12px; }}
+  td:first-child {{ padding-right:6px; }}
+  .sep {{ border-top:1px solid #333; margin:20px 0; }}
+  .code-row {{ display:flex; align-items:center; gap:12px; margin-bottom:18px; }}
+  input[type=text] {{ background:#222; color:#fff; }}
+  input.code {{ font-size:1.8em; width:160px; text-align:center;
+                letter-spacing:6px; padding:8px; border-radius:6px;
+                border:none; background:#222; color:#fff; }}
+  .btn {{ font-size:1.1em; padding:10px 32px; border-radius:6px;
+          border:none; cursor:pointer; margin-right:12px; }}
+  .watch {{ background:#1a73e8; color:#fff; }}
+  .stop  {{ background:#c0392b; color:#fff; }}
+  .err   {{ color:#f66; margin-top:10px; }}
 </style>
 </head>
 <body>
-  <h2>📺 Enter Access Code</h2>
-  <form method="GET" action="/auth">
-    <input type="text" name="code" maxlength="6" autofocus placeholder="______" />
-    <br>
-    <button type="submit">Watch</button>
-  </form>
-  {error}
+<h2>📺 虎牙直播 — 选择频道</h2>
+<form method="GET" action="/auth">
+<table>
+{rows}
+</table>
+<div class="sep"></div>
+<div class="code-row">
+  <span>Access Code:</span>
+  <input class="code" type="text" name="code" maxlength="6" autofocus placeholder="______">
+</div>
+<button class="btn watch" type="submit" name="action" value="watch">▶ Watch</button>
+<button class="btn stop"  type="submit" name="action" value="stop">■ Stop Server</button>
+{('<p class="err">' + error + '</p>') if error else ''}
+</form>
 </body>
 </html>"""
+
+# ================================================================
+#  HTTP HANDLER
+# ================================================================
 
 class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *a):
-        pass  # suppress request logs
+        pass
 
     def client_ip(self):
         return self.headers.get("X-Forwarded-For", self.client_address[0]).split(",")[0].strip()
@@ -191,37 +240,68 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_GET(self):
+        global running
         ip = self.client_ip()
 
         # Gate page
         if self.path == "/" or self.path == "":
-            html = GATE_HTML.format(error="")
+            html = build_gate_html()
             self.send_response(200)
-            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(html.encode())
+            self.wfile.write(html.encode("utf-8"))
             return
 
         # Auth endpoint
         if self.path.startswith("/auth"):
-            from urllib.parse import urlparse, parse_qs
-            qs = parse_qs(urlparse(self.path).query)
+            qs   = parse_qs(urlparse(self.path).query)
             code = qs.get("code", [""])[0].strip()
-            if code == access_code:
-                unlocked_ips.add(ip)
-                print(f"[Auth] {ip} unlocked")
-                self.send_response(302)
-                self.send_header("Location", "/live.m3u8")
-                self.end_headers()
-            else:
-                html = GATE_HTML.format(error='<p class="err">Wrong code. Try again.</p>')
+            action = qs.get("action", ["watch"])[0]
+
+            if code != access_code:
+                html = build_gate_html(error="Wrong code. Try again.")
                 self.send_response(200)
-                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(html.encode())
+                self.wfile.write(html.encode("utf-8"))
+                return
+
+            # Stop server
+            if action == "stop":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"<h2 style='font-family:sans-serif;color:#fff;background:#111;padding:40px'>Server stopped. Goodbye!</h2>")
+                print("[Stop] Shutdown requested via browser")
+                threading.Thread(target=lambda: (time.sleep(1), os.kill(os.getpid(), signal.SIGTERM)), daemon=True).start()
+                return
+
+            # Watch — get selected channel
+            ch_val     = qs.get("ch", [CHANNELS[0][1]])[0]
+            custom_url = qs.get("custom_url", [""])[0].strip()
+            if ch_val == "custom" and "huya.com" in custom_url:
+                url = custom_url
+            elif ch_val == "custom":
+                html = build_gate_html(error="Invalid Huya URL.")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(html.encode("utf-8"))
+                return
+            else:
+                url = ch_val
+
+            unlocked_ips.add(ip)
+            print(f"[Auth] {ip} unlocked → {url}")
+            stop_stream()
+            start_stream(url)
+
+            self.send_response(302)
+            self.send_header("Location", "/live.m3u8")
+            self.end_headers()
             return
 
-        # HLS files — only for unlocked IPs
+        # HLS — only unlocked IPs
         if ip not in unlocked_ips:
             self.send_error(404)
             return
@@ -244,23 +324,16 @@ def main():
     os.makedirs(HLS_DIR, exist_ok=True)
 
     print("=" * 58)
-    print("  HUYA → TV STREAMER (CLOUD)  v1.0")
+    print("  HUYA → TV STREAMER (CLOUD)  v1.2")
     print("=" * 58)
-    print(f"  Channel : {HUYA_URL}")
-    print(f"  Port    : {PORT}")
-    print(f"  Code    : {access_code}")
+    print(f"  Port : {PORT}")
+    print(f"  Code : {access_code}")
     print("=" * 58)
 
-    # Send code to Telegram
-    tg_send(f"📺 TV Streamer started\nChannel: {HUYA_URL}\nAccess code: {access_code}")
+    tg_send(f"📺 TV Streamer started\nAccess code: {access_code}")
 
-    # Start stream
-    start_stream()
-
-    # Start heartbeat
     threading.Thread(target=heartbeat, daemon=True).start()
 
-    # Start HTTP server
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"[HTTP] Server started on port {PORT}")
 
